@@ -277,8 +277,13 @@ cmd_webdisplay_setup() {
     fi
     echo "$url" > "$WEBDISPLAY_URL_FILE"
     echo "[ok] saved: $url"
-    echo "[i] json files will be read from: $WEBDISPLAY_DIR"
-    mkdir -p "$WEBDISPLAY_DIR" 2>/dev/null
+
+    if [[ -d "$WEBDISPLAY_DIR" ]]; then
+        echo "[i] json files will be read from: $WEBDISPLAY_DIR"
+    else
+        echo "[!] folder not found: $WEBDISPLAY_DIR"
+        echo "[!] make sure this folder exists on your device before running webdisplay-send/start."
+    fi
 }
 
 send_one_json() {
