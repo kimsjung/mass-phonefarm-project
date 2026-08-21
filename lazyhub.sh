@@ -262,7 +262,7 @@ cmd_monitor_loop() {
 # ============================================================
 
 WEBDISPLAY_URL_FILE="$HOME/.lazyhub_webdisplay_url"
-WEBDISPLAY_DIR="/sdcard/Delta/LAZYHUB/WebDisplay"
+WEBDISPLAY_DIR="/sdcard/Delta/Workspace/LAZYHUB/WebDisplay"
 WEBDISPLAY_PID_FILE="$HOME/.lazyhub_webdisplay.pid"
 WEBDISPLAY_LOG="$HOME/.lazyhub_webdisplay.log"
 WEBDISPLAY_INTERVAL=900   # 15 minutes
