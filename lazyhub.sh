@@ -262,11 +262,12 @@ cmd_monitor_loop() {
 # ============================================================
 
 WEBDISPLAY_URL_FILE="$HOME/.lazyhub_webdisplay_url"
-WEBDISPLAY_DIR="/sdcard/Delta/Workspace/LAZYHUB/WebDisplay"
+WEBDISPLAY_DIR="/sdcard/Delta/LAZYHUB/WebDisplay"
 WEBDISPLAY_PID_FILE="$HOME/.lazyhub_webdisplay.pid"
 WEBDISPLAY_LOG="$HOME/.lazyhub_webdisplay.log"
-WEBDISPLAY_INTERVAL=900   # 15 minutes
+WEBDISPLAY_INTERVAL=900     # 15 minutes
 WEBDISPLAY_MAX_RETRIES=3
+WEBDISPLAY_STALE_SECONDS=3600   # 1 hour - files older than this get deleted, not sent
 
 cmd_webdisplay_setup() {
     echo "Enter the web display URL (example: http://51.21.21.5:34599/web-display)"
@@ -327,9 +328,27 @@ cmd_webdisplay_send_once() {
     fi
 
     local found=0
+    local now
+    now=$(date +%s)
+
     for f in "$WEBDISPLAY_DIR"/*.json; do
         [[ -e "$f" ]] || continue
         found=1
+
+        local mtime age
+        mtime=$(stat -c %Y "$f" 2>/dev/null)
+        if [[ -z "$mtime" ]]; then
+            echo "[!] $(basename "$f") -> could not read modified time, skipping"
+            continue
+        fi
+        age=$((now - mtime))
+
+        if [[ "$age" -ge "$WEBDISPLAY_STALE_SECONDS" ]]; then
+            echo "[i] $(basename "$f") -> stale (${age}s old, limit ${WEBDISPLAY_STALE_SECONDS}s), deleting instead of sending"
+            rm -f "$f"
+            continue
+        fi
+
         send_one_json "$f" "$url"
     done
 
