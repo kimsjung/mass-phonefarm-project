@@ -241,6 +241,86 @@ is_running() {
     [[ -n "$pid" ]]
 }
 
+# ============================================================
+#  Crash webhook (notifies a URL when a package force-closes)
+# ============================================================
+
+WEBHOOK_URL_FILE="$HOME/.lazyhub_webhook_url"
+WEBHOOK_MAX_RETRIES=3
+
+cmd_webhook_setup() {
+    echo "Enter your Discord webhook URL"
+    echo "(Channel Settings -> Integrations -> Webhooks -> New Webhook -> Copy URL)"
+    read -r -p "URL: " url
+    if [[ -z "$url" ]]; then
+        echo "[!] empty URL, not saved."
+        exit 1
+    fi
+    echo "$url" > "$WEBHOOK_URL_FILE"
+    echo "[ok] saved: $url"
+    echo "[i] this will now fire automatically to Discord whenever a package force-closes during 'start'."
+}
+
+send_webhook_event() {
+    local pkg="$1" event="$2"
+    if [[ ! -f "$WEBHOOK_URL_FILE" ]]; then
+        return 0
+    fi
+    local url
+    url=$(cat "$WEBHOOK_URL_FILE")
+
+    local ts
+    ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+    # Discord webhook payload. Mentions (@here) only trigger a real ping
+    # when placed in top-level "content" - text inside an embed does NOT
+    # ping, even if it visually shows "@here". allowed_mentions makes sure
+    # the ping actually fires.
+    local payload
+    payload=$(cat <<JSON
+{
+  "content": "@here",
+  "embeds": [
+    {
+      "title": "🔴 App Force Closed",
+      "color": 15158332,
+      "fields": [
+        {"name": "Package", "value": "$pkg", "inline": true},
+        {"name": "Event", "value": "$event", "inline": true}
+      ],
+      "timestamp": "$ts",
+      "footer": {"text": "LazyHub Monitor"}
+    }
+  ],
+  "allowed_mentions": {"parse": ["everyone"]}
+}
+JSON
+)
+
+    local attempt=1
+    local code
+    while [[ $attempt -le $WEBHOOK_MAX_RETRIES ]]; do
+        code=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            --data "$payload" \
+            --connect-timeout 10 --max-time 20 \
+            "$url")
+
+        if [[ "$code" =~ ^2 ]]; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [webhook] $pkg $event -> HTTP $code"
+            return 0
+        fi
+
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [webhook] $pkg $event -> HTTP ${code:-no response} (attempt $attempt/$WEBHOOK_MAX_RETRIES)"
+        attempt=$((attempt + 1))
+        [[ $attempt -le $WEBHOOK_MAX_RETRIES ]] && sleep $((attempt * 3))
+    done
+
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [webhook] $pkg $event -> FAILED after $WEBHOOK_MAX_RETRIES attempts"
+    return 1
+}
+
 cmd_monitor_loop() {
     # internal - runs forever in background, checking each package is alive
     ensure_conf
@@ -251,6 +331,9 @@ cmd_monitor_loop() {
             [[ "$pkg" =~ ^#.*$ || -z "$pkg" ]] && continue
             if ! is_running "$pkg"; then
                 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [!] $pkg not running - relaunching"
+                # fire webhook in background so it doesn't delay the relaunch
+                ( send_webhook_event "$pkg" "force_close" >> "$MONITOR_LOG" 2>&1 ) &
+                disown
                 launch_and_place "$pkg" "$x" "$y" "$w" "$h"
             fi
         done < "$CONF"
@@ -455,6 +538,9 @@ case "${1:-}" in
     webdisplay-send)
         cmd_webdisplay_send_once
         ;;
+    webhook-setup)
+        cmd_webhook_setup
+        ;;
     _monitor_loop)
         cmd_monitor_loop
         ;;
@@ -462,7 +548,7 @@ case "${1:-}" in
         cmd_webdisplay_loop
         ;;
     *)
-        echo "Usage: $0 {setup|init|save|launch|start|stop|webdisplay-setup|webdisplay-send}"
+        echo "Usage: $0 {setup|init|save|launch|start|stop|webdisplay-setup|webdisplay-send|webhook-setup}"
         echo ""
         echo "  setup             - enable freeform + force resizable (run once, then reboot)"
         echo "  init              - launch all 5 packages into freeform, staggered, for manual arranging"
@@ -472,6 +558,7 @@ case "${1:-}" in
         echo "  stop              - stop both background loops started by 'start'"
         echo "  webdisplay-setup  - configure the URL to POST json files to"
         echo "  webdisplay-send   - send all json files once, right now (for testing)"
+        echo "  webhook-setup     - configure the URL to notify when a package force-closes"
         exit 1
         ;;
 esac
