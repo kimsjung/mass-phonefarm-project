@@ -35,6 +35,9 @@ PACKAGES=(
     com.roblox.dclienw
     com.roblox.dclienq
     com.roblox.dcliens
+    com.roblox.dclienm
+    com.roblox.dclienn
+    com.roblox.dclienb
 )
 
 # ---- pick a shell runner: su, or shizuku's rish ----
