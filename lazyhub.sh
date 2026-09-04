@@ -35,7 +35,7 @@ PACKAGES=(
     com.roblox.dclienw
     com.roblox.dclienq
     com.roblox.dcliens
-    com.roblox.dclienm
+    com.roblox.dclienv
     com.roblox.dclienn
     com.roblox.dclienb
 )
