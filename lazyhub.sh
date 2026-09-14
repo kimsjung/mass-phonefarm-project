@@ -14,6 +14,8 @@
 #   ./lazyhub.sh stop              -> stop both background loops started by 'start'
 #   ./lazyhub.sh webdisplay-setup  -> ask for the web display URL, save it
 #   ./lazyhub.sh webdisplay-send   -> send all json files once, right now (for testing)
+#   ./lazyhub.sh webhook-setup     -> configure Discord webhook URL for force-close alerts
+#   ./lazyhub.sh privateserver-setup -> set private server link(s) - all packages or per-package
 #
 # Typical first-time flow:
 #   ./lazyhub.sh setup             (then reboot device)
@@ -60,6 +62,27 @@ ensure_conf() {
     fi
 }
 
+PRIVATESERVER_CONF="$HOME/.lazyhub_privateserver.conf"
+
+get_private_server_url() {
+    # Looks up a private server URL for $1 (package). Checks a package-specific
+    # entry first, then falls back to the "ALL" entry. Echoes empty string
+    # (and normal launch is used) if neither is configured.
+    local pkg="$1"
+    [[ ! -f "$PRIVATESERVER_CONF" ]] && { echo ""; return; }
+
+    local specific
+    specific=$(grep "^${pkg}|" "$PRIVATESERVER_CONF" 2>/dev/null | head -n1 | cut -d'|' -f2-)
+    if [[ -n "$specific" ]]; then
+        echo "$specific"
+        return
+    fi
+
+    local allurl
+    allurl=$(grep "^ALL|" "$PRIVATESERVER_CONF" 2>/dev/null | head -n1 | cut -d'|' -f2-)
+    echo "$allurl"
+}
+
 get_taskid() {
     local pkg="$1"
     local dump
@@ -88,25 +111,33 @@ get_current_bounds() {
 launch_and_place() {
     local pkg="$1" x="$2" y="$3" w="$4" h="$5"
 
-    echo "[*] $pkg -> resolving launch activity..."
-    local comp
-    comp=$(RUN "cmd package resolve-activity --brief '$pkg'" | tail -n 1 | tr -d '\r')
-
-    if [[ -z "$comp" || "$comp" != *"/"* ]]; then
-        echo "    [!] could not resolve activity for $pkg, skipping"
-        return 1
-    fi
-    echo "    resolved: $comp"
-
-    # If the app crashed, Android often leaves its old task alive in Recents.
-    # Relaunching with --windowingMode 5 against an EXISTING task gets ignored
-    # (the flag only applies when a brand-new task is created) - so the app
-    # comes back fullscreen, not freeform, and never gets positioned.
-    # force-stop first to guarantee a clean, fresh task every time.
     RUN "am force-stop '$pkg'" >/dev/null 2>&1
     sleep 0.5
 
-    RUN "am start -n '$comp' --windowingMode 5" >/dev/null 2>&1
+    local psurl
+    psurl=$(get_private_server_url "$pkg")
+
+    if [[ -n "$psurl" ]]; then
+        echo "[*] $pkg -> launching via private server link"
+        RUN "am start -a android.intent.action.VIEW -d '$psurl' -p '$pkg' --windowingMode 5" >/dev/null 2>&1
+    else
+        echo "[*] $pkg -> resolving launch activity..."
+        local comp
+        comp=$(RUN "cmd package resolve-activity --brief '$pkg'" | tail -n 1 | tr -d '\r')
+
+        if [[ -z "$comp" || "$comp" != *"/"* ]]; then
+            echo "    [!] could not resolve activity for $pkg, skipping"
+            return 1
+        fi
+        echo "    resolved: $comp"
+
+        # If the app crashed, Android often leaves its old task alive in Recents.
+        # Relaunching with --windowingMode 5 against an EXISTING task gets ignored
+        # (the flag only applies when a brand-new task is created) - so the app
+        # comes back fullscreen, not freeform, and never gets positioned.
+        # force-stop above already guarantees a clean, fresh task every time.
+        RUN "am start -n '$comp' --windowingMode 5" >/dev/null 2>&1
+    fi
 
     local taskid=""
     for i in 1 2 3 4 5; do
@@ -224,6 +255,72 @@ cmd_launch() {
     done < "$CONF"
 
     echo "[i] done - all packages launched."
+}
+
+# ============================================================
+#  Private server mode (open a specific private-server link
+#  instead of the normal app launch)
+# ============================================================
+
+conf_upsert_line() {
+    # Replace or append a "key|value" line in a file, key-matched on the
+    # part before the first "|".
+    local file="$1" key="$2" value="$3"
+    touch "$file"
+    local tmp="${file}.tmp"
+    grep -v "^${key}|" "$file" > "$tmp" 2>/dev/null
+    echo "${key}|${value}" >> "$tmp"
+    mv "$tmp" "$file"
+}
+
+cmd_privateserver_setup() {
+    echo "Private Server Mode setup"
+    echo "  a) same private server URL for ALL packages"
+    echo "  e) set individually per package (opens each one so you can check its username)"
+    read -r -p "Choose [a/e]: " mode
+
+    case "$mode" in
+        a|A)
+            read -r -p "Enter private server URL for ALL packages: " url
+            if [[ -z "$url" ]]; then
+                echo "[!] empty URL, not saved."
+                exit 1
+            fi
+            conf_upsert_line "$PRIVATESERVER_CONF" "ALL" "$url"
+            echo "[ok] saved private server URL for all packages."
+            ;;
+        e|E)
+            echo "[i] using mode: $MODE"
+            for pkg in "${PACKAGES[@]}"; do
+                echo ""
+                echo "[*] opening $pkg normally so you can check which account it's logged into..."
+                RUN "am force-stop '$pkg'" >/dev/null 2>&1
+                sleep 0.5
+                local comp
+                comp=$(RUN "cmd package resolve-activity --brief '$pkg'" | tail -n 1 | tr -d '\r')
+                if [[ -z "$comp" || "$comp" != *"/"* ]]; then
+                    echo "    [!] could not resolve activity for $pkg, skipping"
+                    continue
+                fi
+                RUN "am start -n '$comp' --windowingMode 5" >/dev/null 2>&1
+                sleep 4
+                echo "    look at the $pkg window now - check the username/account logged in."
+                read -r -p "    Enter private server URL for $pkg (leave blank to use default launch): " url
+                if [[ -n "$url" ]]; then
+                    conf_upsert_line "$PRIVATESERVER_CONF" "$pkg" "$url"
+                    echo "    [ok] saved for $pkg"
+                else
+                    echo "    [i] skipped - $pkg will use default/ALL mode"
+                fi
+            done
+            echo ""
+            echo "[i] private server setup done."
+            ;;
+        *)
+            echo "[!] invalid choice, nothing changed."
+            exit 1
+            ;;
+    esac
 }
 
 # ============================================================
@@ -345,7 +442,7 @@ cmd_monitor_loop() {
 # ============================================================
 
 WEBDISPLAY_URL_FILE="$HOME/.lazyhub_webdisplay_url"
-WEBDISPLAY_DIR="/sdcard/Delta/Workspace/LAZYHUB/WebDisplay"
+WEBDISPLAY_DIR="/sdcard/Delta/LAZYHUB/WebDisplay"
 WEBDISPLAY_PID_FILE="$HOME/.lazyhub_webdisplay.pid"
 WEBDISPLAY_LOG="$HOME/.lazyhub_webdisplay.log"
 WEBDISPLAY_INTERVAL=900     # 15 minutes
@@ -541,6 +638,9 @@ case "${1:-}" in
     webhook-setup)
         cmd_webhook_setup
         ;;
+    privateserver-setup)
+        cmd_privateserver_setup
+        ;;
     _monitor_loop)
         cmd_monitor_loop
         ;;
@@ -548,17 +648,18 @@ case "${1:-}" in
         cmd_webdisplay_loop
         ;;
     *)
-        echo "Usage: $0 {setup|init|save|launch|start|stop|webdisplay-setup|webdisplay-send|webhook-setup}"
+        echo "Usage: $0 {setup|init|save|launch|start|stop|webdisplay-setup|webdisplay-send|webhook-setup|privateserver-setup}"
         echo ""
-        echo "  setup             - enable freeform + force resizable (run once, then reboot)"
-        echo "  init              - launch all 5 packages into freeform, staggered, for manual arranging"
-        echo "  save              - save current window positions/sizes of all 5 packages"
-        echo "  launch            - launch all 5 packages into their saved freeform positions"
-        echo "  start             - launch all packages + background app monitor + webdisplay sender"
-        echo "  stop              - stop both background loops started by 'start'"
-        echo "  webdisplay-setup  - configure the URL to POST json files to"
-        echo "  webdisplay-send   - send all json files once, right now (for testing)"
-        echo "  webhook-setup     - configure the URL to notify when a package force-closes"
+        echo "  setup                - enable freeform + force resizable (run once, then reboot)"
+        echo "  init                 - launch all 5 packages into freeform, staggered, for manual arranging"
+        echo "  save                 - save current window positions/sizes of all 5 packages"
+        echo "  launch               - launch all 5 packages into their saved freeform positions"
+        echo "  start                - launch all packages + background app monitor + webdisplay sender"
+        echo "  stop                 - stop both background loops started by 'start'"
+        echo "  webdisplay-setup     - configure the URL to POST json files to"
+        echo "  webdisplay-send      - send all json files once, right now (for testing)"
+        echo "  webhook-setup        - configure the Discord webhook URL for force-close alerts"
+        echo "  privateserver-setup  - configure private server links (all packages, or per-package)"
         exit 1
         ;;
 esac
