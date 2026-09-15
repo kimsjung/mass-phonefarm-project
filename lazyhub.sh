@@ -174,6 +174,11 @@ launch_and_place() {
     else
         echo "    [!] $pkg still didn't stabilize at target bounds after retries"
     fi
+
+    if [[ -n "$psurl" ]]; then
+        echo "    [i] private server launch - waiting 10s before next package..."
+        sleep 10
+    fi
 }
 
 cmd_setup() {
